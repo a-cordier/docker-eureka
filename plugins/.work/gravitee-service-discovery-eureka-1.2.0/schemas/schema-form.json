@@ -1,0 +1,14 @@
+{
+  "type" : "object",
+  "id" : "urn:jsonschema:io:gravitee:discovery:eureka:configuration:EurekaServiceDiscoveryConfiguration",
+  "properties" : {
+    "application" : {
+      "title": "Application",
+      "description": "The application name to query",
+      "type" : "string"
+    }
+  },
+  "required": [
+    "application"
+  ]
+}

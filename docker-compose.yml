@@ -1,0 +1,168 @@
+version: '3.7'
+
+networks:
+  storage:
+    name: storage
+  management:
+    name: management
+  proxy:
+    name: proxy
+  
+volumes:
+  data-elasticsearch:
+  data-mongo:
+
+services:
+  ## STORAGE
+  mongodb:
+    image: mongo:${MONGODB_VERSION:-4.4.6}
+    container_name: gio_apim_mongodb
+    restart: always
+    volumes:
+      - data-mongo:/data/db
+      - ./.logs/apim-mongodb:/var/log/mongodb
+    networks:
+      - storage
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-7.10.2-arm64}
+    container_name: gio_apim_elasticsearch
+    restart: always
+    volumes:
+      - data-elasticsearch:/usr/share/elasticsearch/data
+    environment:
+      - http.host=0.0.0.0
+      - transport.host=0.0.0.0
+      - xpack.security.enabled=false
+      - xpack.monitoring.enabled=false
+      - cluster.name=elasticsearch
+      - bootstrap.memory_lock=true
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile: 65536
+    networks:
+      - storage
+  
+  ## APIM
+
+  gateway:
+    image: graviteeio/apim-gateway:${APIM_VERSION:-nightly}
+    container_name: gio_apim_gateway
+    restart: always
+    ports:
+      - "8082:8082"
+    depends_on:
+      - mongodb
+      - elasticsearch
+      - eureka-server
+    volumes:
+      - ./.logs/apim-gateway:/opt/graviteeio-gateway/logs
+      - ./plugins:/opt/graviteeio-gateway/plugins-ext
+      - ./conf/gateway:/opt/graviteeio-gateway/config
+    environment:
+      - gravitee_management_mongodb_uri=mongodb://mongodb:27017/gravitee?serverSelectionTimeoutMS=5000&connectTimeoutMS=5000&socketTimeoutMS=5000
+      - gravitee_ratelimit_mongodb_uri=mongodb://mongodb:27017/gravitee?serverSelectionTimeoutMS=5000&connectTimeoutMS=5000&socketTimeoutMS=5000
+      - gravitee_services_tracing_enabled=true
+      - gravitee_services_tracing_type=jaeger
+      - gravitee_services_tracing_jaeger_host=jaeger
+      - gravitee_services_tracing_jaeger_port=14250
+      - gravitee_reporters_elasticsearch_endpoints_0=http://elasticsearch:9200
+      - gravitee_plugins_path_0=$${gravitee.home}/plugins
+      - gravitee_plugins_path_1=$${gravitee.home}/plugins-ext
+      - service-discovery.eureka.serviceUrl.default=http://eureka-server:8761/eureka/
+      - gravitee_classloader_legacy_enabled=true
+    networks:
+      - storage
+      - proxy
+
+  management_api:
+    image: graviteeio/apim-management-api:${APIM_VERSION:-nightly}
+    container_name: gio_apim_management_api
+    restart: always
+    ports:
+      - "8083:8083"
+    links:
+      - mongodb
+      - elasticsearch
+    depends_on:
+      - mongodb
+      - elasticsearch
+    volumes:
+      - ./.logs/apim-management-api:/opt/graviteeio-management-api/logs
+      - ./plugins:/opt/graviteeio-management-api/plugins-ext
+    environment:
+      - gravitee_management_mongodb_uri=mongodb://mongodb:27017/gravitee?serverSelectionTimeoutMS=5000&connectTimeoutMS=5000&socketTimeoutMS=5000
+      - gravitee_analytics_elasticsearch_endpoints_0=http://elasticsearch:9200
+      - gravitee_plugins_path_0=$${gravitee.home}/plugins
+      - gravitee_plugins_path_1=$${gravitee.home}/plugins-ext
+      - service-discovery.eureka.serviceUrl.default=http://eureka-server:8761/eureka/
+    networks:
+      - storage
+      - management
+      - proxy
+
+  management_ui:
+    image: graviteeio/apim-management-ui:${APIM_VERSION:-nightly}
+    container_name: gio_apim_management_ui
+    restart: always
+    ports:
+      - "8084:8080"
+    depends_on:
+      - management_api
+    environment:
+      - MGMT_API_URL=http://localhost:8083/management/organizations/DEFAULT/environments/DEFAULT/
+    volumes:
+      - ./.logs/apim-management-ui:/var/log/nginx
+    networks:
+      - management
+
+  portal_ui:
+    image: graviteeio/apim-portal-ui:${APIM_VERSION:-nightly}
+    container_name: gio_apim_portal_ui
+    restart: always
+    ports:
+      - "8085:8080"
+    depends_on:
+      - management_api
+    environment:
+      - PORTAL_API_URL=http://localhost:8083/portal/environments/DEFAULT
+    volumes:
+      - ./.logs/apim-portal-ui:/var/log/nginx
+    networks:
+      - management
+
+  ## EUREKA
+  eureka-server:
+    build: ./eureka-server
+    ports:
+      - "8761:8761"
+    networks:
+      - proxy
+  app-1:
+    build: ./eureka-client
+    environment:
+      - APPLICATION_NAME=app1
+      - APPLICATION_PORT=9000
+      - EUREKA_URI=http://eureka-server:8761/eureka/
+    ports:
+      - "9000:9000"
+    depends_on:
+      - eureka-server
+    networks:
+      - proxy
+  app-2:
+    build: ./eureka-client
+    environment:
+      - APPLICATION_NAME=app2
+      - APPLICATION_PORT=9001
+      - EUREKA_URI=http://eureka-server:8761/eureka/
+    ports:
+      - "9001:9001"
+    depends_on:
+      - eureka-server
+    networks:
+      - proxy
